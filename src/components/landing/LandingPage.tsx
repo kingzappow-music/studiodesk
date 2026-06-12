@@ -68,6 +68,9 @@ const LandingPage: React.FC<LandingPageProps> = ({ onLaunchWeb, exeDownloadUrl }
             <div className="hero-platforms">
               Available for Windows & Web Browsers (Chrome/Edge recommended)
             </div>
+            <div className="smartscreen-note">
+              <strong>Windows users:</strong> If you see a SmartScreen warning, click <strong>"More info"</strong> then <strong>"Run anyway"</strong> — this is normal for new apps without a paid code certificate.
+            </div>
           </div>
           
           <div className="hero-visual">

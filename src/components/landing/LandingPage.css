@@ -380,3 +380,12 @@
     flex-direction: column;
   }
 }
+
+.smartscreen-note {
+  margin-top: 14px;
+  font-size: 12px;
+  color: #888;
+  max-width: 480px;
+  line-height: 1.5;
+}
+.smartscreen-note strong { color: #aaa; }
