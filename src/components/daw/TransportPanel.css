@@ -216,3 +216,54 @@
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0.2; }
 }
+
+/* ── Laptop / compact screens (≤820px viewport height) ── */
+@media (max-height: 820px) {
+  .transport-panel {
+    height: 50px;
+    padding: 0 10px;
+    gap: 10px;
+  }
+  .transport-section {
+    height: 32px;
+    padding: 0 5px;
+    gap: 3px;
+  }
+  .transport-btn {
+    width: 28px;
+    height: 26px;
+  }
+  .layout-btn {
+    width: 26px;
+    height: 26px;
+  }
+  .time-display {
+    padding: 0 10px;
+    min-width: 120px;
+  }
+  .time-primary { font-size: 13px; }
+  .time-secondary { font-size: 9px; margin-top: 1px; }
+  .tempo-box { padding: 0 8px; }
+  .tempo-box .label { font-size: 8.5px; }
+  .tempo-box .value { font-size: 11px; margin-top: 1px; }
+  .stream-section { min-width: 70px; padding: 0 6px; }
+  .stream-label { font-size: 9px; }
+  .perf-meter { gap: 6px; }
+  .meter-bar { width: 44px; }
+}
+
+/* ── Very small / compressed screens (≤680px viewport height) ── */
+@media (max-height: 680px) {
+  .transport-panel {
+    height: 44px;
+    gap: 6px;
+    padding: 0 6px;
+  }
+  .transport-section { height: 28px; padding: 0 4px; gap: 2px; }
+  .transport-btn { width: 24px; height: 22px; }
+  .time-primary { font-size: 11px; }
+  .time-secondary { display: none; }
+  .tempo-box .label { font-size: 7.5px; }
+  .tempo-box .value { font-size: 10px; }
+  .perf-meter { display: none; }
+}

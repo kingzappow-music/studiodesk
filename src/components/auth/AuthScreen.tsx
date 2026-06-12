@@ -11,7 +11,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isArtist, setIsArtist] = useState(true);
-  const [isSignUp] = useState(false); // Sign up disabled for now
+  const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -122,15 +122,13 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
             {loading ? 'Processing...' : (isSignUp ? 'Create Account' : `Connect as ${isArtist ? 'Artist' : 'Engineer'}`)}
           </button>
           
-          {/* Sign up disabled for now
-          <button 
-            type="button" 
-            className="toggle-auth-mode-btn" 
+          <button
+            type="button"
+            className="toggle-auth-mode-btn"
             onClick={() => setIsSignUp(!isSignUp)}
           >
             {isSignUp ? 'Already have an account? Sign In' : 'Need an account? Sign Up'}
           </button>
-          */}
         </form>
       </div>
     </div>

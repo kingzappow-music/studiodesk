@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Video, Mic, MicOff, VideoOff, Minimize2, Maximize2, X, PhoneCall, MessageSquare, MonitorPlay, MonitorX } from 'lucide-react';
+import { Video, Mic, MicOff, VideoOff, Minimize2, X, PhoneCall, MessageSquare, MonitorPlay, MonitorX } from 'lucide-react';
 import { useWebRTC } from '../../hooks/useWebRTC';
 import { useDaw } from '../../context/DawContext';
 import { useAudioEngine } from '../../hooks/useAudioEngine';
@@ -12,22 +12,31 @@ interface FloatingVideoChatProps {
   userId: string;
   roomCode: string;
   onInputEvent?: (event: RemoteInputEvent) => void;
-  onRcStateChange?: (active: boolean, sendFn: ((e: RemoteInputEvent) => void) | null) => void;
+  /** active, sendFn, remoteScreenStream */
+  onRcStateChange?: (active: boolean, sendFn: ((e: RemoteInputEvent) => void) | null, screenStream: MediaStream | null) => void;
 }
 
 const FloatingVideoChat: React.FC<FloatingVideoChatProps> = ({
   userRole, userId, roomCode, onInputEvent, onRcStateChange,
 }) => {
-  const [isMinimized, setIsMinimized] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(true);
   const [showChat, setShowChat] = useState(false);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+  const [monitorVolume, setMonitorVolume] = useState(0.7); // Engineer monitor gain (0–1)
+  const [rcDenied, setRcDenied] = useState(false);
   const dragRef = useRef<{ startX: number; startY: number; initialX: number; initialY: number } | null>(null);
 
-  const { masterStreamRef } = useDaw();
+  const { masterStreamRef, audioCtxRef } = useDaw();
   const { initAudioCtx } = useAudioEngine();
 
+  // AudioContext GainNode for the Engineer's monitor level — lets them
+  // control how loud the Artist's DAW output is in their headphones without
+  // touching the actual recorded signal level.
+  const monitorGainRef = useRef<GainNode | null>(null);
+  const monitorSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+
   const {
-    localStream, remoteStream, remoteDawStream, isConnected, callActive,
+    localStream, remoteStream, remoteDawStream, remoteScreenStream, isConnected, callActive,
     isMicOn, isVideoOn,
     incomingCall, isCalling, callerId, messages,
     ring, acceptCall, declineCall, sendMessage,
@@ -51,7 +60,6 @@ const FloatingVideoChat: React.FC<FloatingVideoChatProps> = ({
 
   const localVideoRef   = useRef<HTMLVideoElement>(null);
   const remoteVideoRef  = useRef<HTMLVideoElement>(null);
-  const remoteDawAudioRef = useRef<HTMLAudioElement>(null);
   const chatScrollRef   = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -62,12 +70,54 @@ const FloatingVideoChat: React.FC<FloatingVideoChatProps> = ({
     if (remoteVideoRef.current && remoteStream) remoteVideoRef.current.srcObject = remoteStream;
   }, [remoteStream]);
 
+  // Engineer: route Artist's DAW stream through an AudioContext GainNode
+  // so the Monitor knob controls their listening level without touching the signal.
   useEffect(() => {
-    if (remoteDawAudioRef.current && remoteDawStream) {
-      remoteDawAudioRef.current.srcObject = remoteDawStream;
-      remoteDawAudioRef.current.volume = 1.0;
+    if (userRole !== 'engineer' || !remoteDawStream) return;
+
+    // Lazily spin up / reuse AudioContext
+    let ctx = audioCtxRef.current;
+    if (!ctx || ctx.state === 'closed') {
+      ctx = new AudioContext();
+      audioCtxRef.current = ctx;
     }
-  }, [remoteDawStream]);
+    const resume = ctx.state === 'suspended' ? ctx.resume() : Promise.resolve();
+
+    let gainNode: GainNode;
+    let source: MediaStreamAudioSourceNode;
+
+    resume.then(() => {
+      if (!ctx) return;
+      // Disconnect any previous monitor chain
+      monitorSourceRef.current?.disconnect();
+      monitorGainRef.current?.disconnect();
+
+      source = ctx.createMediaStreamSource(remoteDawStream);
+      gainNode = ctx.createGain();
+      gainNode.gain.value = monitorVolume;
+      source.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      monitorSourceRef.current = source;
+      monitorGainRef.current = gainNode;
+    });
+
+    return () => {
+      source?.disconnect();
+      gainNode?.disconnect();
+      monitorSourceRef.current = null;
+      monitorGainRef.current = null;
+    };
+  // remoteDawStream identity change triggers reconnect; monitorVolume does NOT re-create the chain
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remoteDawStream, userRole, audioCtxRef]);
+
+  // Live-update gain without recreating the audio graph
+  useEffect(() => {
+    if (monitorGainRef.current) {
+      monitorGainRef.current.gain.setTargetAtTime(monitorVolume, 0, 0.02);
+    }
+  }, [monitorVolume]);
 
   useEffect(() => {
     if (chatScrollRef.current) {
@@ -75,10 +125,15 @@ const FloatingVideoChat: React.FC<FloatingVideoChatProps> = ({
     }
   }, [messages, showChat]);
 
+  // Reset deny flag when engineer withdraws the request (so next request shows banner again)
+  useEffect(() => {
+    if (!rcRequested) setRcDenied(false);
+  }, [rcRequested]);
+
   // Notify parent when RC state changes so it can show overlay and wire sendInputEvent
   useEffect(() => {
-    onRcStateChange?.(rcActive, rcActive ? sendInputEvent : null);
-  }, [rcActive, sendInputEvent, onRcStateChange]);
+    onRcStateChange?.(rcActive, rcActive ? sendInputEvent : null, rcActive ? remoteScreenStream : null);
+  }, [rcActive, sendInputEvent, onRcStateChange, remoteScreenStream]);
 
   // Artist: auto-prompt screen share when Engineer requests RC
   // (no silent auto-accept — the consent banner below handles this)
@@ -112,17 +167,16 @@ const FloatingVideoChat: React.FC<FloatingVideoChatProps> = ({
   if (isMinimized) {
     const slot = document.getElementById('transport-chat-slot');
     if (!slot) return null;
+    const pillStatus = incomingCall ? 'ringing' : callActive && isConnected ? 'connected' : callActive ? 'connecting' : 'idle';
     return createPortal(
-      <div className="transport-chat-pill" onClick={() => setIsMinimized(false)} title="Restore video chat">
-        <div className={`live-dot-small ${callActive && isConnected ? 'connected' : incomingCall ? 'ringing' : ''}`} />
-        <div className="minimized-avatars-small">
-          <div className="avatar-small">A</div>
-          <div className="avatar-small engineer">E</div>
+      <div className={`transport-chat-pill pill-${pillStatus}`} onClick={() => setIsMinimized(false)} title="Open Video Chat">
+        <div className="pill-video-icon">
+          <Video size={14} />
         </div>
+        <div className={`live-dot-small ${pillStatus === 'connected' ? 'connected' : pillStatus === 'ringing' ? 'ringing' : ''}`} />
         <span className="transport-chat-label">
-          {incomingCall ? 'Incoming...' : rcActive ? 'RC Active' : callActive ? (isConnected ? 'Live' : 'Connecting…') : 'Chat'}
+          {incomingCall ? 'Incoming Call' : rcActive ? 'Remote Control' : callActive ? (isConnected ? 'In Call' : 'Connecting…') : 'Video Call'}
         </span>
-        <Maximize2 size={11} color="#808080" />
       </div>,
       slot,
     );
@@ -133,7 +187,7 @@ const FloatingVideoChat: React.FC<FloatingVideoChatProps> = ({
       className="floating-video-widget"
       style={position ? { left: position.x, top: position.y, right: 'auto', bottom: 'auto', margin: 0 } : undefined}
     >
-      {remoteDawStream && <audio ref={remoteDawAudioRef} autoPlay />}
+      {/* remoteDawStream is now routed through AudioContext GainNode above — no raw <audio> element needed */}
 
       <div
         className="widget-header"
@@ -156,12 +210,12 @@ const FloatingVideoChat: React.FC<FloatingVideoChatProps> = ({
       </div>
 
       {/* Artist: RC consent banner */}
-      {rcRequested && userRole === 'artist' && (
+      {rcRequested && !rcDenied && userRole === 'artist' && (
         <div className="rc-consent-banner">
           <span className="rc-consent-text">Engineer is requesting remote control</span>
           <div className="rc-consent-actions">
-            <button className="rc-consent-btn decline" onClick={() => {/* just ignore — rcRequested stays */}}>Deny</button>
-            <button className="rc-consent-btn accept" onClick={startScreenShare}>Allow</button>
+            <button className="rc-consent-btn decline" onClick={() => setRcDenied(true)}>Deny</button>
+            <button className="rc-consent-btn accept" onClick={() => { setRcDenied(false); startScreenShare(); }}>Allow</button>
           </div>
         </div>
       )}
@@ -258,6 +312,24 @@ const FloatingVideoChat: React.FC<FloatingVideoChatProps> = ({
             </button>
           )}
         </div>
+
+        {/* Engineer Monitor Level knob — controls local listening volume only */}
+        {userRole === 'engineer' && remoteDawStream && (
+          <div className="monitor-knob-row">
+            <span className="monitor-knob-label">Monitor</span>
+            <input
+              id="monitor-level-knob"
+              type="range"
+              className="monitor-knob-slider"
+              min={0} max={1} step={0.01}
+              value={monitorVolume}
+              onChange={e => setMonitorVolume(parseFloat(e.target.value))}
+              title={`Monitor level: ${Math.round(monitorVolume * 100)}%`}
+            />
+            <span className="monitor-knob-value">{Math.round(monitorVolume * 100)}%</span>
+          </div>
+        )}
+
         <div className="widget-extra-controls">
           <button className={`chat-toggle-btn ${showChat ? 'active' : ''}`} onClick={() => setShowChat(!showChat)} title="Toggle Chat">
             <MessageSquare size={16} color={showChat ? '#000' : '#fff'} />

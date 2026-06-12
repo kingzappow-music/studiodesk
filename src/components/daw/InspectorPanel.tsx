@@ -50,9 +50,14 @@ const InspectorPanel = () => {
           </div>
           <div className="section-body p-0">
             {[1, 2, 3, 4, 5, 6].map((i) => (
-              <div key={i} className="insert-slot">
+              <div
+                key={i}
+                className="insert-slot"
+                title="VST3 plug-in support coming in a future update"
+                style={{ cursor: 'not-allowed', opacity: 0.5 }}
+              >
                 <Power size={12} className="power-off" />
-                <span className="slot-name"></span>
+                <span className="slot-name" style={{ color: '#555', fontSize: 11 }}>— empty —</span>
                 <ChevronDown size={12} className="dropdown-icon" />
               </div>
             ))}

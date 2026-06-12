@@ -116,9 +116,9 @@ const LandingPage: React.FC<LandingPageProps> = ({ onLaunchWeb, exeDownloadUrl }
         <div className="footer-content">
           <div className="footer-logo">StudioDESK</div>
           <div className="footer-links">
-            <a href="#">Privacy Policy</a>
-            <a href="#">Terms of Service</a>
-            <a href="#">Support</a>
+            <a href="https://github.com/shantileemedia-developer/studiodesk/blob/main/PRIVACY.md" target="_blank" rel="noreferrer">Privacy Policy</a>
+            <a href="https://github.com/shantileemedia-developer/studiodesk/blob/main/TERMS.md" target="_blank" rel="noreferrer">Terms of Service</a>
+            <a href="mailto:shantelbridget93@gmail.com">Support</a>
           </div>
         </div>
       </footer>

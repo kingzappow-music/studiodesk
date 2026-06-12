@@ -115,39 +115,40 @@
 /* ── Right-click mini toolbox ───────────────────── */
 .mini-toolbox {
   position: fixed;
-  background-color: #252628;
+  background-color: #23252a;
   border: 1px solid #3a3b3e;
-  border-radius: 6px;
-  padding: 4px;
+  border-radius: 8px;
+  padding: 5px;
   z-index: 400;
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.7);
-  min-width: 130px;
+  flex-direction: row;
+  gap: 2px;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.04);
 }
 
 .mini-tool-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
   background: transparent;
-  border: none;
-  color: #b0b0b0;
+  border: 1px solid transparent;
+  color: #848890;
   cursor: pointer;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 500;
-  text-align: left;
-  width: 100%;
-  transition: background 0.1s;
+  border-radius: 5px;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  flex-shrink: 0;
 }
-.mini-tool-btn:hover { background-color: #2e2f33; color: #e0e0e0; }
+.mini-tool-btn:hover {
+  background-color: #2e3038;
+  color: #d0d4dc;
+  border-color: #3a3c44;
+}
 .mini-tool-btn.active {
-  background-color: #00ffcc;
-  color: #000;
-  border-color: #00ffcc;
+  background-color: rgba(0, 255, 204, 0.15);
+  color: #00ffcc;
+  border-color: rgba(0, 255, 204, 0.4);
 }
 
 /* Loop & Punch Overlays */
@@ -272,10 +273,33 @@
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 4px;
-  top: 18px;
+  bottom: 2px;
+  top: 16px;
   overflow: hidden;
-  opacity: 0.85;
+}
+
+/* Playback scan shimmer — moves left→right while transport is playing */
+.waveform-scan {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 20%,
+    rgba(255,255,255,0.055) 42%,
+    rgba(255,255,255,0.12)  50%,
+    rgba(255,255,255,0.055) 58%,
+    transparent 80%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: waveform-scan 2.4s linear infinite;
+}
+
+@keyframes waveform-scan {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 .timeline-ruler {

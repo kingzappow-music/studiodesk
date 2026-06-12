@@ -10,6 +10,7 @@ interface TransportPanelProps {
   toggleInspector: () => void;
   onPlay: () => void;
   onStop: () => void;
+  onReturnToZero: () => void;
   onRecord: () => void;
   userRole?: 'artist' | 'engineer';
   isStreaming?: boolean;
@@ -34,7 +35,7 @@ const toBarsBeats = (seconds: number, tempo: number): string => {
 };
 
 const TransportPanel: React.FC<TransportPanelProps> = ({
-  toggleInspector, onPlay, onStop, onRecord,
+  toggleInspector, onPlay, onStop, onReturnToZero, onRecord,
   userRole, isStreaming = false, isReceiving = false, onToggleStream,
 }) => {
   const { state, dispatch, currentTimeRef } = useDaw();
@@ -68,11 +69,7 @@ const TransportPanel: React.FC<TransportPanelProps> = ({
 
       {/* Main transport buttons */}
       <div className="transport-section transport-main">
-        <button className="transport-btn" onClick={() => {
-          currentTimeRef.current = 0;
-          dispatch({ type: 'SET_CURRENT_TIME', payload: 0 });
-          onStop();
-        }} title="Return to Zero">
+        <button className="transport-btn" onClick={onReturnToZero} title="Return to Zero">
           <SkipBack size={20} fill="currentColor" />
         </button>
         <button className="transport-btn" onClick={() => {

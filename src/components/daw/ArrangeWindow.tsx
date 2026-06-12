@@ -1,9 +1,9 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
-import { ZoomIn, ZoomOut } from 'lucide-react';
+import { ZoomIn, ZoomOut, MousePointer2, Crosshair, Scissors, Combine, Eraser, VolumeX, Pencil } from 'lucide-react';
 import { useDaw } from '../../context/DawContext';
 import type { ActiveTool, Region, PoolItem } from '../../context/DawContext';
 import WaveformDisplay from './WaveformDisplay';
-import { generatePeaks, uploadAudioToSupabase } from '../../utils/audioUtils';
+import { generatePeaksStereo, uploadAudioToSupabase } from '../../utils/audioUtils';
 import './ArrangeWindow.css';
 
 const BASE_PX_PER_SEC = 100;
@@ -41,15 +41,15 @@ const TOOL_CURSORS: Record<ActiveTool, string> = {
   zoom: 'zoom-in',
 };
 
-const MINI_TOOLS: { id: ActiveTool; label: string }[] = [
-  { id: 'select', label: 'Select   [1]' },
-  { id: 'range',  label: 'Range    [2]' },
-  { id: 'split',  label: 'Split    [3]' },
-  { id: 'glue',   label: 'Glue     [4]' },
-  { id: 'erase',  label: 'Erase    [5]' },
-  { id: 'zoom',   label: 'Zoom     [6]' },
-  { id: 'mute',   label: 'Mute     [7]' },
-  { id: 'draw',   label: 'Draw     [8]' },
+const MINI_TOOLS: { id: ActiveTool; label: string; icon: React.ReactNode }[] = [
+  { id: 'select', label: 'Select [1]',  icon: <MousePointer2 size={15} /> },
+  { id: 'range',  label: 'Range [2]',   icon: <Crosshair size={15} /> },
+  { id: 'split',  label: 'Split [3]',   icon: <Scissors size={15} /> },
+  { id: 'glue',   label: 'Glue [4]',    icon: <Combine size={15} /> },
+  { id: 'erase',  label: 'Erase [5]',   icon: <Eraser size={15} /> },
+  { id: 'zoom',   label: 'Zoom [6]',    icon: <ZoomIn size={15} /> },
+  { id: 'mute',   label: 'Mute [7]',    icon: <VolumeX size={15} /> },
+  { id: 'draw',   label: 'Draw [8]',    icon: <Pencil size={15} /> },
 ];
 
 function toBars(seconds: number, tempo: number) {
@@ -274,14 +274,14 @@ const ArrangeWindow = () => {
                 const ab    = await res.arrayBuffer();
                 const ctx2  = new AudioContext();
                 const buf   = await ctx2.decodeAudioData(ab.slice(0));
-                const peaks = await generatePeaks(buf);
+                const { left: peaks, right: peaksR } = await generatePeaksStereo(buf);
                 ctx2.close();
                 const blobNew     = new Blob([ab], { type: 'audio/webm' });
                 const bounceName  = `Bounce_${region.name}`;
                 const newUrl      = await uploadAudioToSupabase(blobNew, `${bounceName}_${Date.now()}.webm`);
                 const stamp       = Date.now();
-                const newPoolItem: PoolItem = { id: `pool_bnc_${stamp}`, name: bounceName, audioUrl: newUrl, duration: region.duration, createdAt: new Date(), waveformPeaks: peaks };
-                const newRegion: Region = { ...region, id: `region_bnc_${stamp}`, name: bounceName, audioUrl: newUrl, waveformPeaks: peaks };
+                const newPoolItem: PoolItem = { id: `pool_bnc_${stamp}`, name: bounceName, audioUrl: newUrl, duration: region.duration, createdAt: new Date(), waveformPeaks: peaks, waveformPeaksR: peaksR };
+                const newRegion: Region = { ...region, id: `region_bnc_${stamp}`, name: bounceName, audioUrl: newUrl, waveformPeaks: peaks, waveformPeaksR: peaksR };
                 dispatch({ type: 'BOUNCE_REGIONS', payload: { regionIds: [region.id], newRegion, newPoolItem } });
               } catch (err) { console.error('Bounce failed', err); }
             })();
@@ -557,22 +557,24 @@ const ArrangeWindow = () => {
 
   // ── File drag ghost ──────────────────────────────────────────────
   const getDropCoords = (e: React.DragEvent) => {
-    const rect = contentScrollRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 };
-    const sl   = contentScrollRef.current?.scrollLeft ?? 0;
-    const x    = e.clientX - rect.left + sl;
-    const y    = e.clientY - (rect as DOMRect).top;
-
-    let currentTop = 0;
-    let trackIdx = 0;
-    for (let i = 0; i < tracks.length; i++) {
-      const h = tracks[i].height ?? 80;
-      if (y >= currentTop && y < currentTop + h) { trackIdx = i; break; }
-      currentTop += h;
-    }
-    if (y >= currentTop) trackIdx = Math.max(0, tracks.length - 1);
-
+    const el   = contentScrollRef.current;
+    const rect = el?.getBoundingClientRect() ?? { left: 0, top: 0 };
+    const sl   = el?.scrollLeft ?? 0;
+    const x    = e.clientX - (rect as DOMRect).left + sl;
     const startTime = Math.max(0, x / pxPerSec);
-    return { trackIdx, startTime };
+
+    // Use elementFromPoint so the browser's own hit-test picks the track row,
+    // avoiding any rect/coordinate mismatch in Electron.
+    const hit  = document.elementFromPoint(e.clientX, e.clientY);
+    const row  = hit?.closest?.('.arrange-track');
+    if (row && el) {
+      const rows = el.querySelectorAll('.arrange-track');
+      const idx  = Array.from(rows).indexOf(row as HTMLElement);
+      if (idx !== -1) return { trackIdx: idx, startTime };
+    }
+
+    // Fallback: clamp to last track
+    return { trackIdx: Math.max(0, tracks.length - 1), startTime };
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -615,16 +617,19 @@ const ArrangeWindow = () => {
 
     for (const file of files) {
       try {
+        // File extends Blob — use it directly so we never lose the data.
+        // decodeAudioData() transfers (detaches) its ArrayBuffer argument,
+        // so we decode a copy and keep the original File as the upload source.
         const ab       = await file.arrayBuffer();
         const audioCtx = new AudioContext();
-        const buf      = await audioCtx.decodeAudioData(ab);
-        const peaks    = await generatePeaks(buf);
-        const blob     = new Blob([ab], { type: file.type || 'audio/wav' });
+        const buf      = await audioCtx.decodeAudioData(ab.slice(0));
+        audioCtx.close();
+        const { left: peaks, right: peaksR } = await generatePeaksStereo(buf);
         const name     = file.name.replace(/\.[^.]+$/, '');
-        const audioUrl = await uploadAudioToSupabase(blob, file.name);
+        const audioUrl = await uploadAudioToSupabase(file, file.name);
 
-        dispatch({ type: 'ADD_POOL_ITEM', payload: { id: `pool_${Date.now()}`, name, audioUrl, duration: buf.duration, createdAt: new Date(), waveformPeaks: peaks } });
-        dispatch({ type: 'ADD_REGION',    payload: { id: `region_${Date.now()}`, trackId: target.id, versionId: target.activeVersionId, startTime, duration: buf.duration, name, audioUrl, waveformPeaks: peaks } });
+        dispatch({ type: 'ADD_POOL_ITEM', payload: { id: `pool_${Date.now()}`, name, audioUrl, duration: buf.duration, createdAt: new Date(), waveformPeaks: peaks, waveformPeaksR: peaksR } });
+        dispatch({ type: 'ADD_REGION',    payload: { id: `region_${Date.now()}`, trackId: target.id, versionId: target.activeVersionId, startTime, duration: buf.duration, name, audioUrl, waveformPeaks: peaks, waveformPeaksR: peaksR } });
       } catch { /* skip undecodable */ }
     }
   };
@@ -839,7 +844,12 @@ const ArrangeWindow = () => {
                         </span>
                         {region.waveformPeaks.length > 0 && (
                           <div className="region-waveform">
-                            <WaveformDisplay peaks={region.waveformPeaks} color={region.isMuted ? '#555' : track.color} height={44} />
+                            <WaveformDisplay
+                              peaks={region.waveformPeaks}
+                              peaksR={region.waveformPeaksR ?? null}
+                              color={region.isMuted ? '#555' : track.color}
+                              isPlaying={state.transport.isPlaying}
+                            />
                           </div>
                         )}
                         {activeTool === 'split' && splitPreview?.regionId === region.id && (
@@ -911,12 +921,13 @@ const ArrangeWindow = () => {
       {/* Right-click mini toolbox */}
       {miniMenu && (
         <div ref={miniMenuRef} className="mini-toolbox" style={{ left: miniMenu.x, top: miniMenu.y }}>
-          {MINI_TOOLS.map(({ id, label }) => (
+          {MINI_TOOLS.map(({ id, label, icon }) => (
             <button
               key={id}
               className={`mini-tool-btn ${activeTool === id ? 'active' : ''}`}
               onClick={() => { dispatch({ type: 'SET_TOOL', payload: id }); setMiniMenu(null); }}
-            >{label}</button>
+              title={label}
+            >{icon}</button>
           ))}
         </div>
       )}

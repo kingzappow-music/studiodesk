@@ -1,10 +1,11 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 import { useDaw } from '../context/DawContext';
 import type { Region, PoolItem } from '../context/DawContext';
-import { generatePeaks, uploadAudioToSupabase } from '../utils/audioUtils';
+import { generatePeaksStereo, uploadAudioToSupabase } from '../utils/audioUtils';
+import { loadAudioPrefs } from '../components/daw/AudioMIDIPreferencesDialog';
 
 export const useAudioEngine = () => {
-  const { state, dispatch, currentTimeRef, audioCtxRef, recordingStartTimeRef, livePeaksRef, trackAnalysersRef, userRole, masterStreamRef, audioDirHandle } = useDaw();
+  const { state, dispatch, currentTimeRef, audioCtxRef, recordingStartTimeRef, livePeaksRef, trackAnalysersRef, trackGainsRef, userRole, masterStreamRef, audioDirHandle } = useDaw();
 
   const animFrameRef = useRef<number | null>(null);
   const playStartAudioTimeRef = useRef<number>(0);
@@ -21,8 +22,12 @@ export const useAudioEngine = () => {
 
   const getAudioCtx = useCallback(() => {
     if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
-      const ctx = new AudioContext();
+      const prefs = loadAudioPrefs();
+      const ctx = new AudioContext({ sampleRate: prefs.sampleRate });
       audioCtxRef.current = ctx;
+      if (prefs.outputDeviceId !== 'default' && 'setSinkId' in ctx) {
+        (ctx as any).setSinkId(prefs.outputDeviceId).catch(() => {});
+      }
       if (userRole === 'artist') {
         masterStreamRef.current = ctx.createMediaStreamDestination();
       }
@@ -95,11 +100,6 @@ export const useAudioEngine = () => {
     dispatch({ type: 'SET_PLAYING', payload: true });
     startAnimLoop(ctx);
 
-    if (userRole === 'engineer') {
-      // Engineer receives audio via WebRTC and doesn't load local buffers.
-      return;
-    }
-
     // Load and schedule all non-muted regions that overlap current time
     const hasSolo = state.tracks.some(t => t.isSolo);
     const playableTracks = new Set(
@@ -109,20 +109,22 @@ export const useAudioEngine = () => {
     );
 
     const trackBusses: Record<string, { gain: GainNode; analyser: AnalyserNode }> = {};
+    trackGainsRef.current = {};
     for (const track of state.tracks) {
       const gain = ctx.createGain();
-      gain.gain.value = track.volume;
-      
+      gain.gain.value = isFinite(track.volume) ? track.volume : 0.8;
+
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 64;
-      analyser.smoothingTimeConstant = 0.8;
-      
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.75;
+
       gain.connect(analyser);
       analyser.connect(ctx.destination);
       if (masterStreamRef.current) analyser.connect(masterStreamRef.current);
-      
+
       trackBusses[track.id] = { gain, analyser };
       trackAnalysersRef.current[track.id] = analyser;
+      trackGainsRef.current[track.id]     = gain;
     }
 
     for (const region of state.regions) {
@@ -176,7 +178,20 @@ export const useAudioEngine = () => {
     activeSourcesRef.current.forEach(s => { try { s.stop(); } catch { /* already stopped */ } });
     activeSourcesRef.current = [];
     trackAnalysersRef.current = {};
-  }, [trackAnalysersRef]);
+    trackGainsRef.current = {};
+  }, [trackAnalysersRef, trackGainsRef]);
+
+  // Live fader/mute — push track volume changes to active GainNodes immediately
+  useEffect(() => {
+    const hasSolo = state.tracks.some(t => t.isSolo);
+    for (const track of state.tracks) {
+      const gain = trackGainsRef.current[track.id];
+      if (!gain) continue;
+      const muted  = track.isMuted || (hasSolo && !track.isSolo);
+      const target = muted ? 0 : (isFinite(track.volume) ? track.volume : 0.8);
+      gain.gain.setTargetAtTime(target, audioCtxRef.current?.currentTime ?? 0, 0.015);
+    }
+  }, [state.tracks, trackGainsRef, audioCtxRef]);
 
   const stopRecordingSession = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -224,9 +239,14 @@ export const useAudioEngine = () => {
 
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      const prefs = loadAudioPrefs();
+      const audioConstraint: MediaTrackConstraints | boolean =
+        prefs.inputDeviceId !== 'default'
+          ? { deviceId: { exact: prefs.inputDeviceId } }
+          : true;
+      stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint, video: false });
     } catch {
-      alert('Microphone access denied. Please allow microphone access.');
+      alert('Microphone access denied. Please allow microphone access in your browser or system settings.');
       return;
     }
 
@@ -280,11 +300,14 @@ export const useAudioEngine = () => {
       const blob = new Blob(recordingChunksRef.current, { type: mimeType });
 
       let peaks: number[] = [];
+      let peaksR: number[] | null = null;
       let duration = 0;
       try {
         const ab = await blob.arrayBuffer();
         const audioBuffer = await ctx.decodeAudioData(ab);
-        peaks = await generatePeaks(audioBuffer);
+        const stereo = await generatePeaksStereo(audioBuffer);
+        peaks  = stereo.left;
+        peaksR = stereo.right;
         duration = audioBuffer.duration;
       } catch {
         duration = currentTimeRef.current - recordingStartDawTimeRef.current;
@@ -318,6 +341,7 @@ export const useAudioEngine = () => {
         duration,
         createdAt: new Date(),
         waveformPeaks: peaks,
+        waveformPeaksR: peaksR,
       };
 
       const armedTrackObj = state.tracks.find(t => t.id === currentTrackId);
@@ -330,6 +354,7 @@ export const useAudioEngine = () => {
         name,
         audioUrl,
         waveformPeaks: peaks,
+        waveformPeaksR: peaksR,
       };
 
       dispatch({ type: 'ADD_POOL_ITEM', payload: poolItem });
@@ -345,6 +370,58 @@ export const useAudioEngine = () => {
       dispatch({ type: 'SET_RECORDING', payload: true });
       dispatch({ type: 'SET_PLAYING', payload: true });
       startAnimLoop(ctx);
+
+      // ── Overdub: schedule existing region sources so they play back
+      // alongside the new recording (same logic as play(), but after
+      // the record start position is locked in).
+      const hasSolo = state.tracks.some(t => t.isSolo);
+      const playableTracks = new Set(
+        state.tracks
+          .filter(t => !t.isMuted && (!hasSolo || t.isSolo) && !t.isArmed)
+          .map(t => t.id)
+      );
+
+      const trackBusses: Record<string, { gain: GainNode; analyser: AnalyserNode }> = {};
+      trackGainsRef.current = {};
+      for (const track of state.tracks) {
+        if (!playableTracks.has(track.id)) continue;
+        const gain = ctx.createGain();
+        gain.gain.value = isFinite(track.volume) ? track.volume : 0.8;
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0.75;
+        gain.connect(analyser);
+        analyser.connect(ctx.destination);
+        if (masterStreamRef.current) analyser.connect(masterStreamRef.current);
+        trackBusses[track.id] = { gain, analyser };
+        trackAnalysersRef.current[track.id] = analyser;
+        trackGainsRef.current[track.id]     = gain;
+      }
+
+      const offset = currentTimeRef.current;
+      for (const region of state.regions) {
+        if (!playableTracks.has(region.trackId)) continue;
+        if (region.isMuted) continue;
+        if (!region.audioUrl) continue;
+        if (region.startTime + region.duration <= offset) continue;
+
+        // Fetch + schedule asynchronously — OK since these are pre-recorded clips
+        fetch(region.audioUrl)
+          .then(r => r.arrayBuffer())
+          .then(ab => ctx.decodeAudioData(ab))
+          .then(audioBuffer => {
+            const source = ctx.createBufferSource();
+            source.buffer = audioBuffer;
+            const bus = trackBusses[region.trackId];
+            if (bus) source.connect(bus.gain);
+            const whenInAudio  = playStartAudioTimeRef.current + Math.max(0, region.startTime - offset);
+            const fileOffset   = (region.audioOffset ?? 0) + Math.max(0, offset - region.startTime);
+            const playDuration = region.duration - Math.max(0, offset - region.startTime);
+            source.start(whenInAudio, fileOffset, playDuration);
+            activeSourcesRef.current.push(source);
+          })
+          .catch(() => { /* skip undecodable */ });
+      }
 
       if (state.transport.metronomeOn) {
         const bps = state.transport.tempo / 60;

@@ -201,3 +201,17 @@
 }
 .snap-item:hover { background-color: #2e2f33; }
 .snap-item.active { color: #00ffcc; font-weight: 700; }
+
+
+/* Compact on small-height screens */
+@media (max-height: 820px) {
+  .top-toolbar { height: 34px; padding: 0 8px; }
+  .toolbar-tool-btn { width: 26px; height: 26px; }
+  .toolbar-divider { margin: 0 4px; }
+  .session-badge { font-size: 9px; padding: 2px 6px; }
+  .room-code-display { font-size: 10px; }
+}
+@media (max-height: 680px) {
+  .top-toolbar { height: 28px; padding: 0 6px; }
+  .toolbar-tool-btn { width: 22px; height: 22px; }
+}

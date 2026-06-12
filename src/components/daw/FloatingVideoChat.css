@@ -197,60 +197,87 @@
 .transport-chat-pill {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 0 16px 0 12px;
-  background-color: #1a1b1e;
-  border: 1px solid #2a2b2e;
-  border-radius: 5px;
+  gap: 7px;
+  padding: 0 14px 0 10px;
+  background: linear-gradient(to bottom, #252730, #1c1e24);
+  border: 1px solid #353840;
+  border-radius: 6px;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
   height: 34px;
-  min-width: 160px;
+  min-width: 140px;
 }
 .transport-chat-pill:hover {
-  background-color: #242528;
-  border-color: #3a3b3e;
+  background: linear-gradient(to bottom, #2e3040, #242630);
+  border-color: #4a4e5a;
+  box-shadow: 0 0 10px rgba(0,180,255,0.12);
+}
+
+/* State tints */
+.pill-connected {
+  border-color: rgba(0,255,204,0.35);
+  box-shadow: 0 0 8px rgba(0,255,204,0.08);
+}
+.pill-ringing {
+  border-color: rgba(255,170,0,0.5);
+  animation: pill-ring-flash 1.2s step-end infinite;
+}
+@keyframes pill-ring-flash {
+  0%, 49% { border-color: rgba(255,170,0,0.6); }
+  50%, 100% { border-color: rgba(255,170,0,0.15); }
+}
+
+.pill-video-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: #00b4ff22;
+  border-radius: 5px;
+  color: #00b4ff;
+  flex-shrink: 0;
+}
+.pill-connected .pill-video-icon {
+  background: #00ffcc22;
+  color: #00ffcc;
+}
+.pill-ringing .pill-video-icon {
+  background: #ffaa0022;
+  color: #ffaa00;
 }
 
 .live-dot-small {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background-color: #ff4d4d;
+  background-color: #555;
   flex-shrink: 0;
 }
 .live-dot-small.connected {
   background-color: #00ffcc;
+  animation: pulse-green-sm 2s infinite;
+}
+.live-dot-small.ringing {
+  background-color: #ffaa00;
+  animation: pulse-ring-small 1.5s infinite;
 }
 
-.minimized-avatars-small {
-  display: flex;
-}
-.avatar-small {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background-color: #444;
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 9px;
-  font-weight: 700;
-  border: 1px solid #212225;
-}
-.avatar-small.engineer {
-  margin-left: -6px;
-  background-color: #00ffcc;
-  color: #000;
+@keyframes pulse-green-sm {
+  0% { box-shadow: 0 0 0 0 rgba(0,255,204,0.5); }
+  70% { box-shadow: 0 0 0 5px rgba(0,255,204,0); }
+  100% { box-shadow: 0 0 0 0 rgba(0,255,204,0); }
 }
 
 .transport-chat-label {
   font-size: 11px;
   font-weight: 600;
-  color: #d1d1d1;
+  color: #b0b4c0;
   white-space: nowrap;
+  letter-spacing: 0.2px;
 }
+.pill-connected .transport-chat-label { color: #00ffcc; }
+.pill-ringing  .transport-chat-label { color: #ffaa00; }
 
 /* Minimized State (old floating pill — kept for reference, no longer rendered) */
 .floating-video-minimized {
@@ -558,4 +585,65 @@
 }
 .rc-consent-btn.accept:hover {
   background: rgba(255, 77, 77, 0.4);
+}
+
+/* ── Engineer Monitor Level knob ─────────────────────────────────── */
+.monitor-knob-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+}
+
+.monitor-knob-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: #666;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.monitor-knob-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 72px;
+  height: 4px;
+  border-radius: 2px;
+  background: #333;
+  outline: none;
+  cursor: pointer;
+  /* Teal filled track via gradient trick */
+  background-image: linear-gradient(#00ffcc, #00ffcc);
+  background-repeat: no-repeat;
+  background-size: calc(var(--val, 70) * 1%) 100%;
+}
+.monitor-knob-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #00ffcc;
+  cursor: pointer;
+  box-shadow: 0 0 4px rgba(0,255,204,0.4);
+  transition: box-shadow 0.15s;
+}
+.monitor-knob-slider::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 8px rgba(0,255,204,0.7);
+}
+.monitor-knob-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #00ffcc;
+  border: none;
+  cursor: pointer;
+}
+
+.monitor-knob-value {
+  font-size: 9px;
+  color: #00ffcc;
+  font-weight: 700;
+  min-width: 26px;
+  text-align: right;
 }

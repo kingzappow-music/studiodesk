@@ -2,11 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "studiolink-dev",
+      "name": "StudioLink Dev",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["vite"],
-      "port": 5173,
-      "autoPort": false
+      "port": 5174
     }
   ]
 }

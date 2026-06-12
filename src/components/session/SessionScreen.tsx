@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link2, Users } from 'lucide-react';
 import './SessionScreen.css';
+
+const LAST_ROOM_KEY = 'studiolink_last_room';
 
 interface SessionScreenProps {
   userRole: 'artist' | 'engineer';
@@ -14,6 +16,17 @@ const SessionScreen: React.FC<SessionScreenProps> = ({ userRole, onJoin }) => {
   const [joinCode, setJoinCode] = useState('');
   const [mode, setMode] = useState<'choose' | 'join'>(userRole === 'engineer' ? 'choose' : 'join');
 
+  // Pre-fill last used room code so a page refresh doesn't lose context
+  useEffect(() => {
+    const last = sessionStorage.getItem(LAST_ROOM_KEY);
+    if (last) setJoinCode(last);
+  }, []);
+
+  const handleJoin = (code: string) => {
+    sessionStorage.setItem(LAST_ROOM_KEY, code);
+    onJoin(code);
+  };
+
   if (mode === 'choose' && userRole === 'engineer') {
     return (
       <div className="session-container">
@@ -22,7 +35,7 @@ const SessionScreen: React.FC<SessionScreenProps> = ({ userRole, onJoin }) => {
           <p className="session-sub">Share this code with your artist to connect</p>
           <div className="session-code-box">{generatedCode}</div>
           <p className="session-hint">Both users must enter the same code</p>
-          <button className="session-btn primary" onClick={() => onJoin(generatedCode)}>
+          <button className="session-btn primary" onClick={() => handleJoin(generatedCode)}>
             <Link2 size={16} />
             Create Session
           </button>
@@ -59,9 +72,14 @@ const SessionScreen: React.FC<SessionScreenProps> = ({ userRole, onJoin }) => {
           maxLength={6}
           autoFocus
         />
+        {joinCode && (
+          <p className="session-hint" style={{ color: '#00ffcc', marginTop: 4 }}>
+            Last session: {joinCode}
+          </p>
+        )}
         <button
           className="session-btn primary"
-          onClick={() => onJoin(joinCode)}
+          onClick={() => handleJoin(joinCode)}
           disabled={joinCode.length < 4}
         >
           <Link2 size={16} />

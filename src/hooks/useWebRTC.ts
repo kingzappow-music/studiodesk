@@ -6,9 +6,16 @@ import type { RemoteInputEvent } from '../types/remote';
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  // Add TURN servers here for production use behind strict firewalls:
-  // { urls: 'turn:your-turn-server.com', username: '...', credential: '...' }
 ];
+
+// TURN server support — set VITE_TURN_URL / VITE_TURN_USER / VITE_TURN_CREDENTIAL in .env
+if (import.meta.env.VITE_TURN_URL) {
+  ICE_SERVERS.push({
+    urls: import.meta.env.VITE_TURN_URL as string,
+    username: import.meta.env.VITE_TURN_USER as string | undefined,
+    credential: import.meta.env.VITE_TURN_CREDENTIAL as string | undefined,
+  });
+}
 
 interface UseWebRTCOptions {
   roomCode: string;
@@ -82,8 +89,28 @@ export const useWebRTC = ({ roomCode, userId, isInitiator, getDawStream, onInput
       else if (hasVideo && !hasAudio) setRemoteScreenStream(stream);
     };
 
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
     pc.onconnectionstatechange = () => {
-      setIsConnected(pc.connectionState === 'connected');
+      const s = pc.connectionState;
+      setIsConnected(s === 'connected');
+
+      if (s === 'disconnected') {
+        // Give it 5 s to self-heal before forcing an ICE restart
+        reconnectTimer = setTimeout(() => {
+          if (pcRef.current?.connectionState === 'disconnected') {
+            pcRef.current.restartIce();
+          }
+        }, 5000);
+      } else if (s === 'connected' || s === 'closed') {
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'failed') {
+        pc.restartIce();
+      }
     };
 
     // Renegotiation — only fires after initial connection for track additions (e.g. screen share)

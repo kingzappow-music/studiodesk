@@ -15,6 +15,7 @@ export interface Track {
   isArmed: boolean;
   isMonitoring: boolean;
   volume: number;
+  pan: number;
   height?: number;
   versions: TrackVersion[];
   activeVersionId: string;
@@ -29,6 +30,7 @@ export interface Region {
   name: string;
   audioUrl: string;
   waveformPeaks: number[];
+  waveformPeaksR?: number[] | null;
   audioOffset?: number;  // seconds into the source file (for split regions)
   isMuted?: boolean;
 }
@@ -40,6 +42,7 @@ export interface PoolItem {
   duration: number;
   createdAt: Date;
   waveformPeaks: number[];
+  waveformPeaksR?: number[] | null;
   isArchive?: boolean; // true for ZIP export packages
 }
 
@@ -80,6 +83,7 @@ export type DawBaseAction =
   | { type: 'SET_RECORDING'; payload: boolean }
   | { type: 'SET_CURRENT_TIME'; payload: number }
   | { type: 'SET_TEMPO'; payload: number }
+  | { type: 'SET_TIME_SIGNATURE'; payload: [number, number] }
   | { type: 'TOGGLE_LOOP' }
   | { type: 'SET_TOOL'; payload: ActiveTool }
   | { type: 'SELECT_TRACK'; payload: string | null }
@@ -141,6 +145,7 @@ const makeTrack = (
     isArmed: false,
     isMonitoring: false,
     volume: 0.8,
+    pan: 0,
     versions: [v1],
     activeVersionId: v1.id,
   };
@@ -153,7 +158,7 @@ const initialTracks: Track[] = [
   makeTrack('Audio Track',  '#4d9fff', 'mono',   '3'),
 ];
 
-const initialState: DawState = {
+export const initialState: DawState = {
   tracks: initialTracks,
   regions: [],
   poolItems: [],
@@ -254,6 +259,8 @@ function coreReducer(state: DawState, action: DawAction): DawState {
       return { ...state, transport: { ...state.transport, currentTime: action.payload } };
     case 'SET_TEMPO':
       return { ...state, transport: { ...state.transport, tempo: action.payload } };
+    case 'SET_TIME_SIGNATURE':
+      return { ...state, transport: { ...state.transport, timeSignature: action.payload } };
     case 'TOGGLE_LOOP':
       return { ...state, transport: { ...state.transport, isLooping: !state.transport.isLooping } };
     case 'SET_LOOP_RANGE':
@@ -497,7 +504,8 @@ interface DawContextValue {
   userRole: 'artist' | 'engineer';
   livePeaksRef: React.MutableRefObject<number[]>;
   trackAnalysersRef: React.MutableRefObject<Record<string, AnalyserNode>>;
-  
+  trackGainsRef: React.MutableRefObject<Record<string, GainNode>>;
+
   // Local Project storage handles (Chrome/Edge File System Access API)
   projectDirHandle: any | null;
   setProjectDirHandle: (handle: any | null) => void;
@@ -522,6 +530,7 @@ export const DawProvider: React.FC<DawProviderProps> = ({ children, userRole }) 
   const livePeaksRef = useRef<number[]>([]);
   const masterStreamRef = useRef<MediaStreamAudioDestinationNode | null>(null);
   const trackAnalysersRef = useRef<Record<string, AnalyserNode>>({});
+  const trackGainsRef     = useRef<Record<string, GainNode>>({});
 
   const [projectDirHandle, setProjectDirHandle] = React.useState<any | null>(null);
   const [audioDirHandle, setAudioDirHandle] = React.useState<any | null>(null);
@@ -540,7 +549,7 @@ export const DawProvider: React.FC<DawProviderProps> = ({ children, userRole }) 
 
   return (
     <DawContext.Provider value={{ 
-      state, dispatch, originalDispatch, setDispatchMiddleware, currentTimeRef, audioCtxRef, recordingStartTimeRef, animFrameRef, masterStreamRef, livePeaksRef, trackAnalysersRef, userRole,
+      state, dispatch, originalDispatch, setDispatchMiddleware, currentTimeRef, audioCtxRef, recordingStartTimeRef, animFrameRef, masterStreamRef, livePeaksRef, trackAnalysersRef, trackGainsRef, userRole,
       projectDirHandle, setProjectDirHandle, audioDirHandle, setAudioDirHandle
     }}>
       {children}

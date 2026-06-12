@@ -1,19 +1,31 @@
 import { supabase } from '../lib/supabaseClient';
 
-export const generatePeaks = async (audioBuffer: AudioBuffer, count = 200): Promise<number[]> => {
-  const data = audioBuffer.getChannelData(0);
-  const blockSize = Math.floor(data.length / count);
+const extractPeaks = (channelData: Float32Array, count: number): number[] => {
+  const blockSize = Math.floor(channelData.length / count);
   const peaks: number[] = [];
   for (let i = 0; i < count; i++) {
     let max = 0;
     for (let j = 0; j < blockSize; j++) {
-      const v = Math.abs(data[i * blockSize + j] ?? 0);
+      const v = Math.abs(channelData[i * blockSize + j] ?? 0);
       if (v > max) max = v;
     }
     peaks.push(max);
   }
   return peaks;
 };
+
+export const generatePeaks = async (audioBuffer: AudioBuffer, count = 800): Promise<number[]> =>
+  extractPeaks(audioBuffer.getChannelData(0), count);
+
+export const generatePeaksStereo = async (
+  audioBuffer: AudioBuffer,
+  count = 800,
+): Promise<{ left: number[]; right: number[] | null }> => ({
+  left:  extractPeaks(audioBuffer.getChannelData(0), count),
+  right: audioBuffer.numberOfChannels >= 2
+    ? extractPeaks(audioBuffer.getChannelData(1), count)
+    : null,
+});
 
 export const uploadAudioToSupabase = async (blob: Blob, fileName: string): Promise<string> => {
   const path = `${Date.now()}_${fileName.replace(/[^a-zA-Z0-9.-]/g, '_')}`;

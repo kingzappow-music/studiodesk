@@ -1,5 +1,7 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useDaw } from '../../context/DawContext';
+import { initialState } from '../../context/DawContext';
+import type { Region, PoolItem } from '../../context/DawContext';
 import { supabase } from '../../lib/supabaseClient';
 import './MenuBar.css';
 
@@ -17,115 +19,296 @@ interface Menu {
 }
 
 interface MenuBarProps {
-  projectName?: string;
   onOpenPreferences?: () => void;
+  onOpenAudioPrefs?: () => void;
+  onExportMixdown?: () => void;
+  onCloseProject?: () => void;
 }
 
-const MenuBar: React.FC<MenuBarProps> = ({ projectName = 'Untitled Project', onOpenPreferences }) => {
+const SHORTCUT_LIST = [
+  { key: 'Space',           action: 'Play / Stop (return to start)' },
+  { key: 'R',               action: 'Toggle Record' },
+  { key: 'Num 0 / Enter',   action: 'Return to Zero' },
+  { key: 'Ctrl+Z',          action: 'Undo' },
+  { key: 'Ctrl+Shift+Z',    action: 'Redo' },
+  { key: 'Ctrl+S',          action: 'Save Project' },
+  { key: 'Ctrl+Shift+S',    action: 'Save As…' },
+  { key: 'Ctrl+L',          action: 'Toggle Loop' },
+  { key: 'Ctrl+M',          action: 'Toggle Metronome' },
+  { key: 'Ctrl+,',          action: 'Preferences' },
+  { key: 'F4',              action: 'Hardware Setup' },
+  { key: 'Delete / Bksp',  action: 'Delete Selected Region' },
+  { key: '1',               action: 'Select Tool' },
+  { key: '2',               action: 'Range Tool' },
+  { key: '3',               action: 'Split Tool' },
+  { key: '4',               action: 'Glue Tool' },
+  { key: '5',               action: 'Erase Tool' },
+  { key: '6',               action: 'Zoom Tool' },
+  { key: '7',               action: 'Mute Tool' },
+  { key: '8',               action: 'Draw Tool' },
+  { key: 'G / H',           action: 'Zoom In / Out (Arrange)' },
+  { key: 'Shift+G / H',     action: 'Track Height Increase / Decrease' },
+  { key: 'Ctrl+Scroll',     action: 'Horizontal Zoom' },
+  { key: 'B',               action: 'Bounce Selected Region' },
+  { key: 'A / B',           action: 'Switch Stereo Track Version' },
+];
+
+const MenuBar: React.FC<MenuBarProps> = ({
+  onOpenPreferences, onOpenAudioPrefs, onExportMixdown, onCloseProject,
+}) => {
   const [openMenu, setOpenMenu] = useState<number | null>(null);
+  const [localToast, setLocalToast] = useState<string | null>(null);
+  const [showAbout, setShowAbout] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showNotepad, setShowNotepad] = useState(false);
+  const [showProjectSetup, setShowProjectSetup] = useState(false);
+  const [notepadText, setNotepadText] = useState(() => localStorage.getItem('sd_notepad') || '');
+  const [projectTempo, setProjectTempo] = useState(0);
+
   const barRef = useRef<HTMLDivElement>(null);
-  const { dispatch, state, setProjectDirHandle, setAudioDirHandle, projectDirHandle } = useDaw();
+  const clipboardRef = useRef<Region | null>(null);
 
-  const handleSaveAs = async () => {
+  const {
+    dispatch, state,
+    setProjectDirHandle, setAudioDirHandle, projectDirHandle,
+    currentTimeRef,
+  } = useDaw();
+  const projectName = projectDirHandle?.name ?? 'Untitled Project';
+
+  const toast = useCallback((msg: string) => {
+    setLocalToast(msg);
+    setTimeout(() => setLocalToast(null), 2500);
+  }, []);
+
+  // ── Project I/O ──────────────────────────────────────────────────────
+
+  const handleSave = useCallback(async (dirHandle = projectDirHandle) => {
+    if (!dirHandle) { handleSaveAs(); return; }
     try {
-      if (!('showDirectoryPicker' in window)) {
-        alert('Local folder saving is currently only supported in Chrome or Edge.');
-        return;
-      }
-      
-      // Request user to select a local directory
+      const fh = await dirHandle.getFileHandle('project.json', { create: true });
+      const w = await fh.createWritable();
+      await w.write(JSON.stringify(state, null, 2));
+      await w.close();
+    } catch (err) { console.error('Save error:', err); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectDirHandle, state]);
+
+  const handleSaveAs = useCallback(async () => {
+    if (!('showDirectoryPicker' in window)) {
+      alert('Local folder saving is only supported in Chrome or Edge.');
+      return;
+    }
+    try {
       // @ts-ignore
-      const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-      setProjectDirHandle(dirHandle);
-
-      // Create or get the Audio subfolder
-      const audioDir = await dirHandle.getDirectoryHandle('Audio', { create: true });
-      setAudioDirHandle(audioDir);
-
-      // Save project.json
-      await handleSave(dirHandle);
-
-      alert(`Project saved successfully to local folder: ${dirHandle.name}`);
+      const dh = await window.showDirectoryPicker({ mode: 'readwrite' });
+      setProjectDirHandle(dh);
+      const adh = await dh.getDirectoryHandle('Audio', { create: true });
+      setAudioDirHandle(adh);
+      const fh = await dh.getFileHandle('project.json', { create: true });
+      const w = await fh.createWritable();
+      await w.write(JSON.stringify(state, null, 2));
+      await w.close();
+      toast(`Saved to: ${dh.name}`);
     } catch (err: any) {
-      if (err.name !== 'AbortError') {
-        console.error('Save As Error:', err);
-        alert('Failed to save project. Ensure you have granted folder permissions.');
-      }
+      if (err.name !== 'AbortError') alert('Failed to save project. Grant folder permissions and try again.');
     }
-  };
+  }, [state, setProjectDirHandle, setAudioDirHandle, toast]);
 
-  const handleSave = async (dirHandle = projectDirHandle) => {
-    if (!dirHandle) {
-      return handleSaveAs();
+  const handleSaveNewVersion = useCallback(async () => {
+    if (!projectDirHandle) { handleSaveAs(); return; }
+    try {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const name = `project-${ts}.json`;
+      const fh = await projectDirHandle.getFileHandle(name, { create: true });
+      const w = await fh.createWritable();
+      await w.write(JSON.stringify(state, null, 2));
+      await w.close();
+      toast(`Version saved: ${name}`);
+    } catch { toast('Failed to save version.'); }
+  }, [projectDirHandle, state, toast, handleSaveAs]);
+
+  const handleOpenProject = useCallback(async () => {
+    if (!('showDirectoryPicker' in window)) {
+      alert('Opening projects from disk is only supported in Chrome or Edge.');
+      return;
     }
     try {
-      const fileHandle = await dirHandle.getFileHandle('project.json', { create: true });
-      const writable = await fileHandle.createWritable();
-      
-      // Optional: exclude large waveform data or blobs from being saved verbatim if needed, 
-      // but for now we just serialize state. We omit pool items' objectUrls because they don't persist well, 
-      // but we do need the file references.
-      const stateToSave = { ...state };
-      
-      await writable.write(JSON.stringify(stateToSave, null, 2));
-      await writable.close();
-      
-      if (dirHandle === projectDirHandle) {
-        // Just a normal save, show a subtle notification or nothing
-        console.log('Project saved to project.json');
-      }
-    } catch (err) {
-      console.error('Save Error:', err);
+      // @ts-ignore
+      const dh = await window.showDirectoryPicker({ mode: 'readwrite' });
+      const fh = await dh.getFileHandle('project.json');
+      const file = await fh.getFile();
+      const saved = JSON.parse(await file.text());
+      dispatch({ type: 'SET_STATE', payload: saved });
+      setProjectDirHandle(dh);
+      const adh = await dh.getDirectoryHandle('Audio', { create: true });
+      setAudioDirHandle(adh);
+      toast(`Opened: ${dh.name}`);
+    } catch (err: any) {
+      if (err.name !== 'AbortError') toast('No project.json found in that folder.');
     }
-  };
+  }, [dispatch, setProjectDirHandle, setAudioDirHandle, toast]);
 
-  const MENUS: Menu[] = useMemo(() => [
+  const handleNewProject = useCallback(() => {
+    if (!confirm('Start a new project? Unsaved changes will be lost.')) return;
+    dispatch({ type: 'SET_STATE', payload: initialState });
+    setProjectDirHandle(null);
+    setAudioDirHandle(null);
+    toast('New project created.');
+  }, [dispatch, setProjectDirHandle, setAudioDirHandle, toast]);
+
+  const handleImportAudio = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'audio/*';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const url = URL.createObjectURL(file);
+      try {
+        const actx = new AudioContext();
+        const buf = await actx.decodeAudioData(await file.arrayBuffer());
+        const duration = buf.duration;
+        const ch = buf.getChannelData(0);
+        const buckets = 200;
+        const step = Math.max(1, Math.floor(ch.length / buckets));
+        const peaks: number[] = [];
+        for (let i = 0; i < buckets; i++) {
+          let max = 0;
+          for (let j = 0; j < step; j++) max = Math.max(max, Math.abs(ch[i * step + j] || 0));
+          peaks.push(max);
+        }
+        await actx.close();
+        const poolItem: PoolItem = {
+          id: `pool_${Date.now()}`,
+          name: file.name.replace(/\.[^.]+$/, ''),
+          audioUrl: url,
+          duration,
+          createdAt: new Date(),
+          waveformPeaks: peaks,
+        };
+        dispatch({ type: 'ADD_POOL_ITEM', payload: poolItem });
+        if (state.selectedTrackId) {
+          const track = state.tracks.find(t => t.id === state.selectedTrackId);
+          if (track) {
+            dispatch({
+              type: 'ADD_REGION',
+              payload: {
+                id: `r_${Date.now()}`,
+                trackId: track.id,
+                versionId: track.activeVersionId,
+                startTime: currentTimeRef.current,
+                duration,
+                name: poolItem.name,
+                audioUrl: url,
+                waveformPeaks: peaks,
+              },
+            });
+          }
+        }
+        toast(`Imported: ${poolItem.name}`);
+      } catch { toast('Could not decode audio file.'); }
+    };
+    input.click();
+  }, [dispatch, state.selectedTrackId, state.tracks, currentTimeRef, toast]);
+
+  // ── Clipboard ────────────────────────────────────────────────────────
+
+  const handleCopy = useCallback(() => {
+    if (!state.selectedRegionId) { toast('Select a region first.'); return; }
+    const r = state.regions.find(r => r.id === state.selectedRegionId);
+    if (r) { clipboardRef.current = { ...r }; toast('Region copied.'); }
+  }, [state.selectedRegionId, state.regions, toast]);
+
+  const handleCut = useCallback(() => {
+    if (!state.selectedRegionId) { toast('Select a region first.'); return; }
+    handleCopy();
+    dispatch({ type: 'REMOVE_REGION', payload: state.selectedRegionId });
+    dispatch({ type: 'SELECT_REGION', payload: null });
+  }, [state.selectedRegionId, handleCopy, dispatch, toast]);
+
+  const handlePaste = useCallback(() => {
+    const src = clipboardRef.current;
+    if (!src) { toast('Nothing to paste.'); return; }
+    const trackId = state.selectedTrackId ?? src.trackId;
+    const track = state.tracks.find(t => t.id === trackId);
+    if (!track) { toast('Select a target track first.'); return; }
+    const newRegion: Region = {
+      ...src,
+      id: `r_${Date.now()}`,
+      trackId: track.id,
+      versionId: track.activeVersionId,
+      startTime: currentTimeRef.current,
+    };
+    dispatch({ type: 'ADD_REGION', payload: newRegion });
+    dispatch({ type: 'SELECT_REGION', payload: newRegion.id });
+  }, [state.selectedTrackId, state.tracks, currentTimeRef, dispatch, toast]);
+
+  const handleDelete = useCallback(() => {
+    if (!state.selectedRegionId) { toast('No region selected.'); return; }
+    dispatch({ type: 'REMOVE_REGION', payload: state.selectedRegionId });
+    dispatch({ type: 'SELECT_REGION', payload: null });
+  }, [state.selectedRegionId, dispatch, toast]);
+
+  const handleSelectAll = useCallback(() => {
+    const first = state.regions.find(r => r.trackId === state.selectedTrackId);
+    if (first) dispatch({ type: 'SELECT_REGION', payload: first.id });
+    else toast('No regions on selected track.');
+  }, [state.regions, state.selectedTrackId, dispatch, toast]);
+
+  // ── Seek ─────────────────────────────────────────────────────────────
+
+  const handleRewind = useCallback(() => {
+    const t = Math.max(0, currentTimeRef.current - 5);
+    currentTimeRef.current = t;
+    dispatch({ type: 'SET_CURRENT_TIME', payload: t });
+  }, [currentTimeRef, dispatch]);
+
+  const handleForward = useCallback(() => {
+    const t = currentTimeRef.current + 5;
+    currentTimeRef.current = t;
+    dispatch({ type: 'SET_CURRENT_TIME', payload: t });
+  }, [currentTimeRef, dispatch]);
+
+  // ── Menus definition ──────────────────────────────────────────────────
+
+  const MENUS: Menu[] = [
     {
       label: 'File',
       items: [
-        { label: 'New Project',          shortcut: 'Ctrl+N' },
-        { label: 'Open Project…',        shortcut: 'Ctrl+O' },
-        { label: 'Open Recent',          disabled: true },
+        { label: 'New Project',           shortcut: 'Ctrl+N',       onClick: handleNewProject },
+        { label: 'Open Project…',         shortcut: 'Ctrl+O',       onClick: handleOpenProject },
+        { label: 'Open Recent',           disabled: true },
         { separator: true, label: '' },
-        { label: 'Close Project' },
+        { label: 'Close Project',         onClick: onCloseProject ?? (() => toast('No session to close.')) },
         { separator: true, label: '' },
-        { label: 'Save',                 shortcut: 'Ctrl+S', onClick: () => handleSave() },
-        { label: 'Save As…',             shortcut: 'Ctrl+Shift+S', onClick: handleSaveAs },
-        { label: 'Save New Version' },
-        { label: 'Revert' },
+        { label: 'Save',                  shortcut: 'Ctrl+S',       onClick: () => handleSave() },
+        { label: 'Save As…',              shortcut: 'Ctrl+Shift+S', onClick: handleSaveAs },
+        { label: 'Save New Version',                                 onClick: handleSaveNewVersion },
         { separator: true, label: '' },
-        { label: 'Import Audio File…' },
-        { label: 'Import MIDI File…' },
+        { label: 'Import Audio File…',                              onClick: handleImportAudio },
         { separator: true, label: '' },
-        { label: 'Export Audio Mixdown…', shortcut: 'Ctrl+Shift+E' },
-        { label: 'Export MIDI File…' },
+        { label: 'Export Audio Mixdown…',                           onClick: onExportMixdown },
         { separator: true, label: '' },
-        { label: 'Preferences…' },
+        { label: 'Preferences…',                                    onClick: onOpenPreferences },
         { separator: true, label: '' },
-        { label: 'Sign Out', onClick: async () => {
-          await supabase.auth.signOut();
-          window.location.reload();
-        } },
-        { label: 'Quit',                  shortcut: 'Ctrl+Q' },
+        { label: 'Sign Out', onClick: async () => { await supabase.auth.signOut(); window.location.reload(); } },
+        { label: 'Quit', shortcut: 'Ctrl+Q', onClick: () => { if (confirm('Quit StudioDESK?')) window.close(); } },
       ],
     },
     {
       label: 'Edit',
       items: [
-        { label: 'Undo',       shortcut: 'Ctrl+Z', disabled: state.history.past.length === 0, onClick: () => dispatch({ type: 'UNDO' }) },
-        { label: 'Redo',       shortcut: 'Ctrl+Shift+Z', disabled: state.history.future.length === 0, onClick: () => dispatch({ type: 'REDO' }) },
-        { label: 'History…' },
+        { label: 'Undo',        shortcut: 'Ctrl+Z',       disabled: state.history.past.length === 0,   onClick: () => dispatch({ type: 'UNDO' }) },
+        { label: 'Redo',        shortcut: 'Ctrl+Shift+Z', disabled: state.history.future.length === 0,  onClick: () => dispatch({ type: 'REDO' }) },
+        { label: 'History…',   disabled: true },
         { separator: true, label: '' },
-        { label: 'Cut',        shortcut: 'Ctrl+X' },
-        { label: 'Copy',       shortcut: 'Ctrl+C' },
-        { label: 'Paste',      shortcut: 'Ctrl+V' },
-        { label: 'Paste at Origin' },
-        { label: 'Delete',     shortcut: 'Del' },
+        { label: 'Cut',         shortcut: 'Ctrl+X', onClick: handleCut },
+        { label: 'Copy',        shortcut: 'Ctrl+C', onClick: handleCopy },
+        { label: 'Paste',       shortcut: 'Ctrl+V', onClick: handlePaste },
+        { label: 'Delete',      shortcut: 'Del',    onClick: handleDelete },
         { separator: true, label: '' },
-        { label: 'Select All', shortcut: 'Ctrl+A' },
-        { label: 'Deselect All' },
-        { separator: true, label: '' },
-        { label: 'Find…',      shortcut: 'Ctrl+F' },
+        { label: 'Select All',  shortcut: 'Ctrl+A', onClick: handleSelectAll },
+        { label: 'Deselect All',                    onClick: () => dispatch({ type: 'SELECT_REGION', payload: null }) },
         { separator: true, label: '' },
         { label: 'Preferences…', shortcut: 'Ctrl+,', onClick: onOpenPreferences },
       ],
@@ -133,118 +316,68 @@ const MenuBar: React.FC<MenuBarProps> = ({ projectName = 'Untitled Project', onO
     {
       label: 'Project',
       items: [
-        { label: 'Project Setup…' },
-        { label: 'Project Properties…' },
-        { label: 'Notepad' },
+        { label: 'Project Setup…',      onClick: () => { setProjectTempo(state.transport.tempo); setShowProjectSetup(true); } },
+        { label: 'Project Properties…', onClick: () => { setProjectTempo(state.transport.tempo); setShowProjectSetup(true); } },
+        { label: 'Notepad',             onClick: () => setShowNotepad(true) },
         { separator: true, label: '' },
-        { label: 'Add Audio Track' },
-        { label: 'Add MIDI Track' },
-        { label: 'Add Instrument Track' },
-        { label: 'Add Stereo Track' },
+        { label: 'Add Audio Track',     onClick: () => { dispatch({ type: 'ADD_TRACK', payload: { trackType: 'mono' } }); toast('Audio track added.'); } },
+        { label: 'Add MIDI Track',      onClick: () => toast('MIDI tracks coming in a future update.') },
+        { label: 'Add Stereo Track',    onClick: () => { dispatch({ type: 'ADD_TRACK', payload: { trackType: 'stereo' } }); toast('Stereo track added.'); } },
         { separator: true, label: '' },
-        { label: 'Markers' },
-        { label: 'Tempo Track' },
-        { label: 'Chord Track' },
+        { label: 'Markers', onClick: () => {
+          dispatch({ type: 'ADD_MARKER', payload: { id: `mk_${Date.now()}`, time: currentTimeRef.current, name: 'Marker' } });
+          toast('Marker added at playhead.');
+        }},
       ],
     },
     {
       label: 'Audio',
       items: [
-        { label: 'Hardware Setup…' },
-        { label: 'Driver Configuration…' },
+        { label: 'Hardware Setup…',       shortcut: 'F4', onClick: onOpenAudioPrefs },
+        { label: 'Driver Configuration…',               onClick: onOpenAudioPrefs },
         { separator: true, label: '' },
-        { label: 'Process' },
-        { label: 'Plug-ins' },
-        { label: 'Advanced' },
-        { separator: true, label: '' },
-        { label: 'Spectrum Analyzer' },
-        { label: 'Statistics…' },
-      ],
-    },
-    {
-      label: 'MIDI',
-      items: [
-        { label: 'MIDI Setup…' },
-        { label: 'MIDI Remote' },
-        { separator: true, label: '' },
-        { label: 'Transpose…' },
-        { label: 'Logical Editor…' },
-        { label: 'Drum Editor' },
-        { separator: true, label: '' },
-        { label: 'Note Expression' },
-        { label: 'Step Designer' },
+        { label: 'Plug-ins', onClick: () => toast('VST3 plug-in support coming in a future update.') },
       ],
     },
     {
       label: 'Transport',
       items: [
-        { label: 'Play',               shortcut: 'Space', onClick: () => dispatch({ type: 'SET_PLAYING', payload: !state.transport.isPlaying }) },
-        { label: 'Record',             shortcut: 'R', onClick: () => dispatch({ type: 'SET_RECORDING', payload: !state.transport.isRecording }) },
-        { label: 'Return to Zero',     shortcut: 'Num 0', onClick: () => dispatch({ type: 'SET_CURRENT_TIME', payload: 0 }) },
-        { label: 'Rewind',             shortcut: 'Num -' },
-        { label: 'Forward',            shortcut: 'Num +' },
+        { label: 'Play',            shortcut: 'Space',  onClick: () => dispatch({ type: 'SET_PLAYING', payload: !state.transport.isPlaying }) },
+        { label: 'Record',          shortcut: 'R',      onClick: () => dispatch({ type: 'SET_RECORDING', payload: !state.transport.isRecording }) },
+        { label: 'Return to Zero',  shortcut: 'Num 0',  onClick: () => dispatch({ type: 'SET_CURRENT_TIME', payload: 0 }) },
+        { label: 'Rewind  (−5 s)',  shortcut: 'Num −',  onClick: handleRewind },
+        { label: 'Forward (+5 s)',  shortcut: 'Num +',  onClick: handleForward },
         { separator: true, label: '' },
-        { label: 'Toggle Loop',        shortcut: 'Ctrl+L', onClick: () => dispatch({ type: 'TOGGLE_LOOP' }) },
-        { label: 'Metronome On/Off',   shortcut: 'Ctrl+M', onClick: () => dispatch({ type: 'TOGGLE_METRONOME' }) },
-        { label: 'Tap Tempo' },
-        { separator: true, label: '' },
-        { label: 'Set Tempo from Selection' },
-      ],
-    },
-    {
-      label: 'Devices',
-      items: [
-        { label: 'Device Manager…' },
-        { label: 'VST Instruments…',  shortcut: 'F11' },
-        { label: 'VST Connections…',  shortcut: 'F4' },
-        { separator: true, label: '' },
-        { label: 'Remote Devices' },
-        { label: 'External FX…' },
-        { label: 'Control Room…' },
-      ],
-    },
-    {
-      label: 'Window',
-      items: [
-        { label: 'New Window' },
-        { separator: true, label: '' },
-        { label: 'Mixer',              shortcut: 'F3' },
-        { label: 'MIDI Remote',        shortcut: 'Alt+M' },
-        { label: 'Tempo Track' },
-        { label: 'Chord Track' },
-        { label: 'Marker Track' },
-        { separator: true, label: '' },
-        { label: 'Tile Windows' },
-        { label: 'Cascade Windows' },
+        { label: 'Toggle Loop',      shortcut: 'Ctrl+L', onClick: () => dispatch({ type: 'TOGGLE_LOOP' }) },
+        { label: 'Metronome On/Off', shortcut: 'Ctrl+M', onClick: () => dispatch({ type: 'TOGGLE_METRONOME' }) },
       ],
     },
     {
       label: 'Help',
       items: [
-        { label: 'Documentation' },
-        { label: 'Keyboard Shortcuts…' },
-        { label: 'Video Tutorials' },
+        { label: 'Documentation',      onClick: () => window.open('https://github.com/shantileemedia-developer/studiodesk', '_blank') },
+        { label: 'Keyboard Shortcuts…', onClick: () => setShowShortcuts(true) },
+        { label: 'Video Tutorials',     onClick: () => toast('Video tutorials coming soon.') },
         { separator: true, label: '' },
-        { label: 'Check for Updates…' },
-        { label: 'About StudioDESK' },
+        { label: 'Check for Updates…', onClick: () => window.open('https://github.com/shantileemedia-developer/studiodesk/releases', '_blank') },
+        { label: 'About StudioDESK',   onClick: () => setShowAbout(true) },
       ],
     },
-  ], [state.history.past.length, state.history.future.length, state.transport.isPlaying, state.transport.isRecording, dispatch, onOpenPreferences]);
+  ];
 
-  // Close on outside click
+  // ── Close / keyboard handlers ─────────────────────────────────────────
+
   useEffect(() => {
     if (openMenu === null) return;
     const h = (e: MouseEvent) => {
-      if (barRef.current && !barRef.current.contains(e.target as Node))
-        setOpenMenu(null);
+      if (barRef.current && !barRef.current.contains(e.target as Node)) setOpenMenu(null);
     };
     document.addEventListener('mousedown', h);
     return () => document.removeEventListener('mousedown', h);
   }, [openMenu]);
 
-  // Close on Escape
   useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpenMenu(null); };
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpenMenu(null); } };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, []);
@@ -259,50 +392,170 @@ const MenuBar: React.FC<MenuBarProps> = ({ projectName = 'Untitled Project', onO
     setOpenMenu(null);
   }, []);
 
+  // ── Render ────────────────────────────────────────────────────────────
+
   return (
-    <div className="menu-bar" ref={barRef}>
-      <div className="menu-bar-logo">
-        <span className="menu-bar-brand">StudioDESK</span>
+    <>
+      <div className="menu-bar" ref={barRef}>
+        <div className="menu-bar-logo">
+          <span className="menu-bar-brand">StudioDESK</span>
+        </div>
+
+        <div className="menu-bar-menus">
+          {MENUS.map((menu, idx) => (
+            <div
+              key={menu.label}
+              className={`menu-bar-item ${openMenu === idx ? 'open' : ''}`}
+              onClick={() => toggleMenu(idx)}
+              onMouseEnter={() => { if (openMenu !== null) setOpenMenu(idx); }}
+            >
+              <span className="menu-bar-label">{menu.label}</span>
+
+              {openMenu === idx && (
+                <div className="menu-dropdown" onClick={e => e.stopPropagation()}>
+                  {menu.items.map((item, i) =>
+                    item.separator ? (
+                      <div key={`sep-${i}`} className="menu-separator" />
+                    ) : (
+                      <div
+                        key={item.label}
+                        className={`menu-item ${item.disabled ? 'disabled' : ''}`}
+                        onClick={() => handleItemClick(item)}
+                      >
+                        <span className="menu-item-label">{item.label}</span>
+                        {item.shortcut && (
+                          <span className="menu-item-shortcut">{item.shortcut}</span>
+                        )}
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="menu-bar-project">
+          <span className="menu-project-name">{projectName}</span>
+        </div>
       </div>
 
-      <div className="menu-bar-menus">
-        {MENUS.map((menu, idx) => (
-          <div
-            key={menu.label}
-            className={`menu-bar-item ${openMenu === idx ? 'open' : ''}`}
-            onClick={() => toggleMenu(idx)}
-            onMouseEnter={() => { if (openMenu !== null) setOpenMenu(idx); }}
-          >
-            <span className="menu-bar-label">{menu.label}</span>
+      {/* ── Local toast ── */}
+      {localToast && (
+        <div className="menu-local-toast">{localToast}</div>
+      )}
 
-            {openMenu === idx && (
-              <div className="menu-dropdown" onClick={e => e.stopPropagation()}>
-                {menu.items.map((item, i) =>
-                  item.separator ? (
-                    <div key={`sep-${i}`} className="menu-separator" />
-                  ) : (
-                    <div
-                      key={item.label}
-                      className={`menu-item ${item.disabled ? 'disabled' : ''}`}
-                      onClick={() => handleItemClick(item)}
-                    >
-                      <span className="menu-item-label">{item.label}</span>
-                      {item.shortcut && (
-                        <span className="menu-item-shortcut">{item.shortcut}</span>
-                      )}
-                    </div>
-                  )
-                )}
-              </div>
-            )}
+      {/* ── About modal ── */}
+      {showAbout && (
+        <div className="menu-modal-overlay" onClick={() => setShowAbout(false)}>
+          <div className="menu-modal" onClick={e => e.stopPropagation()}>
+            <h2 className="menu-modal-title">StudioDESK</h2>
+            <p className="menu-modal-version">Version 0.0.0</p>
+            <p style={{ color: '#aaa', marginTop: 8 }}>
+              Professional audio collaboration for recording engineers and artists.<br />
+              Built with React 19, Electron 42, and WebRTC.
+            </p>
+            <p style={{ color: '#666', fontSize: 12, marginTop: 12 }}>
+              © 2025 Shantel Bradford. All rights reserved.
+            </p>
+            <div className="menu-modal-footer">
+              <button className="menu-modal-btn primary" onClick={() => setShowAbout(false)}>Close</button>
+            </div>
           </div>
-        ))}
-      </div>
+        </div>
+      )}
 
-      <div className="menu-bar-project">
-        <span className="menu-project-name">{projectName}</span>
-      </div>
-    </div>
+      {/* ── Keyboard Shortcuts modal ── */}
+      {showShortcuts && (
+        <div className="menu-modal-overlay" onClick={() => setShowShortcuts(false)}>
+          <div className="menu-modal shortcuts-modal" onClick={e => e.stopPropagation()}>
+            <h2 className="menu-modal-title">Keyboard Shortcuts</h2>
+            <div className="shortcuts-table">
+              {SHORTCUT_LIST.map(({ key, action }) => (
+                <div key={key} className="shortcuts-row">
+                  <kbd className="shortcut-key">{key}</kbd>
+                  <span className="shortcut-action">{action}</span>
+                </div>
+              ))}
+            </div>
+            <div className="menu-modal-footer">
+              <button className="menu-modal-btn primary" onClick={() => setShowShortcuts(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Notepad modal ── */}
+      {showNotepad && (
+        <div className="menu-modal-overlay" onClick={() => setShowNotepad(false)}>
+          <div className="menu-modal notepad-modal" onClick={e => e.stopPropagation()}>
+            <h2 className="menu-modal-title">Project Notepad</h2>
+            <textarea
+              className="notepad-textarea"
+              value={notepadText}
+              onChange={e => setNotepadText(e.target.value)}
+              placeholder="Session notes, chord charts, lyrics, BPM, key…"
+              rows={12}
+            />
+            <div className="menu-modal-footer">
+              <button className="menu-modal-btn secondary" onClick={() => setShowNotepad(false)}>Cancel</button>
+              <button className="menu-modal-btn primary" onClick={() => {
+                localStorage.setItem('sd_notepad', notepadText);
+                setShowNotepad(false);
+                toast('Notepad saved.');
+              }}>Save & Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Project Setup modal ── */}
+      {showProjectSetup && (
+        <div className="menu-modal-overlay" onClick={() => setShowProjectSetup(false)}>
+          <div className="menu-modal project-setup-modal" onClick={e => e.stopPropagation()}>
+            <h2 className="menu-modal-title">Project Setup</h2>
+            <div className="project-setup-rows">
+              <div className="setup-row">
+                <label>Project Folder</label>
+                <span className="setup-value">{projectName}</span>
+              </div>
+              <div className="setup-row">
+                <label>Tempo (BPM)</label>
+                <input
+                  type="number"
+                  className="setup-input"
+                  value={projectTempo}
+                  min={20} max={400}
+                  onChange={e => setProjectTempo(parseInt(e.target.value) || state.transport.tempo)}
+                />
+              </div>
+              <div className="setup-row">
+                <label>Time Signature</label>
+                <span className="setup-value">
+                  {state.transport.timeSignature[0]}/{state.transport.timeSignature[1]}
+                  &nbsp;—&nbsp;edit in Transport bar
+                </span>
+              </div>
+              <div className="setup-row">
+                <label>Audio Device</label>
+                <span className="setup-value setup-link" onClick={() => { onOpenAudioPrefs?.(); setShowProjectSetup(false); }}>
+                  Open Hardware Setup (F4) →
+                </span>
+              </div>
+            </div>
+            <div className="menu-modal-footer">
+              <button className="menu-modal-btn secondary" onClick={() => setShowProjectSetup(false)}>Cancel</button>
+              <button className="menu-modal-btn primary" onClick={() => {
+                if (projectTempo >= 20 && projectTempo <= 400) {
+                  dispatch({ type: 'SET_TEMPO', payload: projectTempo });
+                }
+                setShowProjectSetup(false);
+              }}>Apply</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 };
 

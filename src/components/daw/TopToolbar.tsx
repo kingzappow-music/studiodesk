@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   MousePointer2, Scissors, Eraser, VolumeX, Search,
-  Spline, Pencil, Copy, Palette,
+  Combine, Pencil, Copy, Palette,
 } from 'lucide-react';
 import { useDaw } from '../../context/DawContext';
 import type { ActiveTool } from '../../context/DawContext';
@@ -11,7 +11,7 @@ const TOOLS: { id: ActiveTool; icon: React.ElementType; label: string; key: stri
   { id: 'select', icon: MousePointer2, label: 'Object Selection', key: '1' },
   { id: 'range',  icon: Copy,          label: 'Range Selection',  key: '2' },
   { id: 'split',  icon: Scissors,      label: 'Split',            key: '3' },
-  { id: 'glue',   icon: Spline,        label: 'Glue',             key: '4' },
+  { id: 'glue',   icon: Combine,       label: 'Glue',             key: '4' },
   { id: 'erase',  icon: Eraser,        label: 'Erase',            key: '5' },
   { id: 'zoom',   icon: Search,        label: 'Zoom',             key: '6' },
   { id: 'mute',   icon: VolumeX,       label: 'Mute',             key: '7' },
